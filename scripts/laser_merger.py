@@ -131,22 +131,28 @@ class laser_merger:
     
     def convertPointsToLaserRanges(self, points, laser_ref):
         new_laser_ranges = np.ones(len(laser_ref.ranges)) * np.inf
-        auxiliarly_array = np.zeros((len(laser_ref.ranges),2))         
+        auxiliarly_array = np.zeros((len(points),2))
+        distance_angles = []       
         for i, point in enumerate (points):
             if not np.isinf(point[0]):
-                dist_squared = (point[0] * point[0]) + (point[1] * point[1])
-                r = np.sqrt(dist_squared)
-                angle = np.arctan2(point[0] , point[1])
-                auxiliarly_array[i][0] = r
-                auxiliarly_array[i][1] = angle
-                #print(angle,r)
-        tolerance=0.007
-        for i , theta in enumerate(np.arange(laser_ref.angle_min, laser_ref.angle_max, laser_ref.angle_increment)):
-            for element in auxiliarly_array:
-                
-                if theta - element[1] < tolerance and theta - element[1] > -tolerance:
-                    #print(theta, element[1],theta - element[1],element[0],i)    
+                auxiliarly_array[i][0] = np.sqrt((point[0] * point[0]) + (point[1] * point[1])) # r
+                auxiliarly_array[i][1] = np.arctan2(point[0] , point[1]) # angle
+                distance_angles.append((auxiliarly_array[i][0] , auxiliarly_array[i][1]))
+        #print(list(zip(*distance_angles))[1])
+        serted_list = sorted(distance_angles, key=lambda x: x[1])
+        #print(serted_list)
+        #print(list(zip(*serted_list))[1])
+        tolerance = 0.005
+        angles_array = np.arange(laser_ref.angle_min, laser_ref.angle_max, laser_ref.angle_increment)
+        index = 0
+        for element in auxiliarly_array:
+            for i in range( index, len(laser_ref.ranges)):
+                #print(theta, element[1],theta - element[1],element[0],i)    
+                if angles_array[i-1] - element[1] < tolerance and angles_array[i-1] - element[1] > -tolerance:
+                    index = i
+                    #print(angles_array[i-1], element[1],angles_array[i-1] - element[1],element[0],i)    
                     new_laser_ranges[i] = element[0]
+                    break
 
         return new_laser_ranges
 
@@ -161,10 +167,10 @@ class laser_merger:
             #rotation_y =  -point[0] * np.sin(angle)  +  point[1] * np.cos(angle)
             #print(point[0],translation_x)
             if not np.isinf(point[0]):
-                x =  point[0] + translation_x #+ rotation_x
-                y =  point[1] + translation_y #+ rotation_y
-                transformed_points[i][0] = x
-                transformed_points[i][1] = y
+                #x =  point[0] + translation_x #+ rotation_x
+                #y =  point[1] + translation_y #+ rotation_y
+                transformed_points[i][0] = point[0] + translation_x #+ rotation_x
+                transformed_points[i][1] = point[1] + translation_y #+ rotation_y
             else:
                 transformed_points[i][0] = float("inf")
                 transformed_points[i][1] = float("inf")
@@ -172,17 +178,14 @@ class laser_merger:
 
     # convert laser ranges  (polar plane) to XY points in cartesian plae(not pointcloud)
     def convertLaserRangesToXY(self,laser):
-        converted_array = np.zeros((len(laser.ranges),2)) 
+        converted_array = []
         for i , theta in enumerate(np.arange(laser.angle_min, laser.angle_max, laser.angle_increment)):
             if not np.isinf(laser.ranges[i]):
                 x = laser.ranges[i] * np.sin(theta)
                 y = laser.ranges[i] * np.cos(theta)
-                converted_array[i][0] = x
-                converted_array[i][1] = y
-            else:
-                converted_array[i][0] = float("inf")
-                converted_array[i][1] = float("inf")
-        return converted_array
+                converted_array.append((x ,y))
+        return np.array(converted_array)
+
     #convert XY arrar in cartesian plane to polar plane array
     def convertXYtoLAserRanges(self,points,laser):
         converted_array = np.zeros((len(laser.ranges))) 
