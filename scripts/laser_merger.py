@@ -9,20 +9,26 @@ import numpy as np
 import time
 import math
 import tf2_ros
+from sensor_msgs.msg import PointCloud
+from geometry_msgs.msg import Point32
+from std_msgs.msg import Header
 
 MIN_ANGLE = -3.12413907051
 MAX_ANGLE = 3.14159274101
 STEPS = 2880 #360*4 #1440
 ANGLE_INCREMENT = float(1/STEPS) #resolution
 TIME_INCREMENT = 0.003 
-RANGE_MIN = 0.3
+RANGE_MIN = 0.35
 RANGE_MAX = 50
+
+
 
 class laser_merger:
 
     def __init__(self):
         self.laser_merged_publisher = rospy.Publisher("/scan_merged", LaserScan, queue_size = 1)
         self.laser_debug = rospy.Publisher("/scan_debug", LaserScan, queue_size = 1)
+        self.pcl_debug = rospy.Publisher("/pcl_debug", PointCloud, queue_size = 1)
         self.laser1_sub = rospy.Subscriber('/scan_main', LaserScan, self.callbackLaserMain, queue_size = 1)
         self.laser2_sub = rospy.Subscriber('/scan_aux', LaserScan, self.callbackLaserAux, queue_size = 1)
         self.min_ang = MIN_ANGLE
@@ -46,23 +52,44 @@ class laser_merger:
         self.processing = False
         self.tfBuffer = tf2_ros.Buffer()
         self.listener = tf2_ros.TransformListener(self.tfBuffer)
-        #self.dilation = rospy.get_param("/cost_detect/dilation")
+        self.header = Header()
+        self.header.frame_id = "laser"
+        self.pcl_obj = PointCloud()
+        self.pcl_obj.header = self.header
+
 
 
     def callbackLaserAux(self,msg):
+        TRANSLATION_X_AUX = 0.0
+        TRANSLATION_Y_AUX = -0.20 #-0.20
+        ANGLE_ROTATION_AUX = 0.0
+        
         self.received_laser2 = True
         #if not self.processing:
+        
+
+        arrayXY2 = self.convertLaserRangesToXY(msg)
+        transformedXY2 = self.apply_transformation(arrayXY2 , TRANSLATION_X_AUX , TRANSLATION_Y_AUX , ANGLE_ROTATION_AUX)
+        newranges2 = self.convertPointsToLaserRanges(transformedXY2, msg) #self.convertXYtoLAserRanges(transformedXY2, msg)
+        msg = self.replaceLaserRanges(newranges2, msg)
+        msg.header.stamp = rospy.Time.now()
+        self.laser_debug.publish(msg)
+
         self.laser_tmp2 = msg
 
+        #arrayXY2 = self.convertLaserRangesToXY(self.laser_tmp2)
+        #transformedXY2 = self.apply_transformation(arrayXY2 , TRANSLATION_X_AUX , TRANSLATION_Y_AUX , ANGLE_ROTATION_AUX)
+        #newranges2 = self.convertPointsToLaserRanges(transformedXY2, self.laser_tmp2) #self.convertXYtoLAserRanges(transformedXY2, self.laser_tmp2)
+        #self.laser_tmp2 = self.replaceLaserRanges(newranges2, self.laser_tmp2)
+        #self.laser_tmp2.header.stamp = rospy.Time.now()
+        #self.laser_debug.publish(self.laser_tmp2)
 
     def callbackLaserMain(self,msg):
         TRANSLATION_X_MAIN = 0.0
         TRANSLATION_Y_MAIN = 0.0
         ANGLE_ROTATION_MAIN = 0.0
 
-        TRANSLATION_X_AUX = 0.0
-        TRANSLATION_Y_AUX = -0.20
-        ANGLE_ROTATION_AUX = 0.0
+        
         #if not self.processing:
         self.laser_tmp1 = msg
 
@@ -74,17 +101,9 @@ class laser_merger:
         #transformedXY1 = self.apply_transformation(arrayXY1 , TRANSLATION_X_MAIN , TRANSLATION_Y_MAIN , ANGLE_ROTATION_MAIN)
         #newranges = self.convertXYtoLAserRanges(transformedXY1, self.laser_tmp1)
         
-        #self.laser_tmp1 = self.replaceLaserRanges(newranges, self.laser_tmp1)
-        laser_aux = self.laser_tmp2
-        arrayXY2 = self.convertLaserRangesToXY(laser_aux)
-        transformedXY2 = self.apply_transformation(arrayXY2 , TRANSLATION_X_AUX , TRANSLATION_Y_AUX , ANGLE_ROTATION_AUX)
-        newranges2 = self.convertPointsToLaserRanges(transformedXY2, laser_aux) #self.convertXYtoLAserRanges(transformedXY2, laser_aux)
-        laser_aux = self.replaceLaserRanges(newranges2, laser_aux)
-        laser_aux.header.stamp = rospy.Time.now()
-        self.laser_debug.publish(laser_aux)
 
         #Merge
-        self.laser_merged.ranges = self.mergeLasers(self.laser_tmp1 , laser_aux)
+        self.laser_merged.ranges = self.mergeLasers(self.laser_tmp1 , self.laser_tmp2)#laser_aux)
         self.laser_merged.header = self.laser_tmp1.header
         self.laser_merged.header.stamp = rospy.Time.now()
         self.laser_merged = self.make_intensities(self.laser_merged)
@@ -105,7 +124,6 @@ class laser_merger:
 
     # replace ranges on laser message for new_ranges_array
     def replaceLaserRanges(self, new_ranges, laser):
-        #print(new_ranges)
         new_laser_ranges = np.zeros(len(laser.ranges)) 
         for i , element in enumerate(new_ranges):
             #print(laser.ranges[i],element,i)
@@ -135,55 +153,56 @@ class laser_merger:
         distance_angles = []       
         for i, point in enumerate (points):
             if not np.isinf(point[0]):
-                auxiliarly_array[i][0] = np.sqrt((point[0] * point[0]) + (point[1] * point[1])) # r
+                r = np.sqrt((point[0] * point[0]) + (point[1] * point[1])) # r
+                auxiliarly_array[i][0] = r
                 auxiliarly_array[i][1] = np.arctan2(point[0] , point[1]) # angle
-                distance_angles.append((auxiliarly_array[i][0] , auxiliarly_array[i][1]))
-        #print(list(zip(*distance_angles))[1])
+                if r > RANGE_MIN and r < RANGE_MAX:
+                    distance_angles.append((auxiliarly_array[i][0] , auxiliarly_array[i][1]))
         serted_list = sorted(distance_angles, key=lambda x: x[1])
-        #print(serted_list)
-        #print(list(zip(*serted_list))[1])
-        tolerance = 0.005
+        tolerance = 0.008
         angles_array = np.arange(laser_ref.angle_min, laser_ref.angle_max, laser_ref.angle_increment)
         index = 0
         for element in auxiliarly_array:
-            for i in range( index, len(laser_ref.ranges)):
-                #print(theta, element[1],theta - element[1],element[0],i)    
+            for i in range( index, len(laser_ref.ranges)): 
                 if angles_array[i-1] - element[1] < tolerance and angles_array[i-1] - element[1] > -tolerance:
                     index = i
                     #print(angles_array[i-1], element[1],angles_array[i-1] - element[1],element[0],i)    
                     new_laser_ranges[i] = element[0]
                     break
-
+        print(len(points),len(new_laser_ranges))
         return new_laser_ranges
-
-
 
     # apply transformation matrix
     def apply_transformation(self, points, translation_x, translation_y, angle):
         transformed_points = np.zeros((len(points),2))
-        
+        #pclp = PointCloud()
+        #pclp.header.frame_id = "laser"
         for i, point in enumerate(points):
-            #rotation_x =  point[0]  * np.cos(angle)  +  point[1] * np.sin(angle)
-            #rotation_y =  -point[0] * np.sin(angle)  +  point[1] * np.cos(angle)
-            #print(point[0],translation_x)
             if not np.isinf(point[0]):
-                #x =  point[0] + translation_x #+ rotation_x
-                #y =  point[1] + translation_y #+ rotation_y
-                transformed_points[i][0] = point[0] + translation_x #+ rotation_x
-                transformed_points[i][1] = point[1] + translation_y #+ rotation_y
+                x = point[0]  * np.cos(angle)  +  point[1] * np.sin(angle) + translation_x #rotation_x + traslation
+                y = -point[0] * np.sin(angle)  +  point[1] * np.cos(angle) + translation_y #rotation_y + traslation
+                transformed_points[i][0] = x
+                transformed_points[i][1] = y
+                #pclp.points.append(Point32(y,x,0))        
             else:
                 transformed_points[i][0] = float("inf")
                 transformed_points[i][1] = float("inf")
+        #self.pcl_debug.publish(pclp)
         return transformed_points
 
     # convert laser ranges  (polar plane) to XY points in cartesian plae(not pointcloud)
     def convertLaserRangesToXY(self,laser):
         converted_array = []
+        #pclp = PointCloud()
+        #pclp.header.frame_id = "laser"
         for i , theta in enumerate(np.arange(laser.angle_min, laser.angle_max, laser.angle_increment)):
-            if not np.isinf(laser.ranges[i]):
+            if not np.isinf(laser.ranges[i]) and laser.ranges[i] > RANGE_MIN and laser.ranges[i] < RANGE_MAX:
                 x = laser.ranges[i] * np.sin(theta)
                 y = laser.ranges[i] * np.cos(theta)
                 converted_array.append((x ,y))
+                #pclp.points.append(Point32(y,x,0))
+                
+        #self.pcl_debug.publish(pclp)
         return np.array(converted_array)
 
     #convert XY arrar in cartesian plane to polar plane array
@@ -197,6 +216,7 @@ class laser_merger:
             #print(laser.ranges[i], r, i)
         return converted_array
 
+
     #merge main and aux lasers
     def mergeLasers(self,laser_main,laser_aux):
         result_merged_ranges = np.zeros(STEPS)
@@ -205,22 +225,7 @@ class laser_merger:
         
         return result_merged_ranges
     
-    def lookTransformationMain(self):
-        a = 1
-        #try:
-        #    trans = self.tfBuffer.lookup_transform('base_link', 'laser', rospy.Time())
-        #except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-            #rate.sleep()
-        #    continue
-    
-    def lookTransformationAux(self):
-        b = 1
-        #try:
-        #    trans = self.tfBuffer.lookup_transform('base_link', 'laser_aux', rospy.Time())
-        #except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-        #    #rate.sleep()
-        #    continue
-        
+
 
 def main(args):
     rospy.init_node('laser_merger', anonymous=True)
